@@ -13,10 +13,10 @@ func SetupLedgerRoutes(app *fiber.App, db *pgxpool.Pool) {
 	usecase := NewLedgerUsecase(repo)
 	handler := NewLedgerHandler(usecase)
 
-	r := app.Group("/api/v1/ledgers")
+	r := app.Group("/api/v1/ledgers", middlewares.Authenticate())
 
 	r.Post("/", handler.CreateLedger)
 	r.Get("/", handler.GetListLedger)
 	r.Get("/:id", handler.GetLedgerByID)
-	r.Get("/balance", middlewares.Authenticate(), handler.GetBalance)
+	r.Get("/balance", handler.GetBalance)
 }

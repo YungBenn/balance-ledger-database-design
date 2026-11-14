@@ -18,9 +18,10 @@ INSERT INTO ledger (
         description,
         current,
         ADD,
-        final
+        final,
+        seq
     )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
 -- name: UpdateLedger :one
@@ -43,5 +44,12 @@ WHERE id = $1;
 SELECT final
 FROM ledger
 WHERE user_id = $1
-ORDER BY created_at DESC
+ORDER BY seq DESC
+LIMIT 1;
+
+-- name: GetLatestLedgerByUser :one
+SELECT *
+FROM ledger
+WHERE user_id = $1
+ORDER BY seq DESC
 LIMIT 1;

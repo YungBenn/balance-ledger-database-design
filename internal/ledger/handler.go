@@ -23,6 +23,9 @@ func (h *LedgerHandler) CreateLedger(c *fiber.Ctx) error {
 		return err
 	}
 
+	// Always write to the logged-in user, never to a user_id from the body.
+	arg.UserID = utils.GetCurrentUser(c).UserID
+
 	res, err := h.usecase.CreateLedger(c.Context(), arg)
 	if err != nil {
 		return err
@@ -51,7 +54,7 @@ func (h *LedgerHandler) GetBalance(c *fiber.Ctx) error {
 }
 
 func (h *LedgerHandler) GetListLedger(c *fiber.Ctx) error {
-	userID := c.Query("user_id")
+	userID := utils.GetCurrentUser(c).UserID
 	limit := c.QueryInt("limit")
 	offset := c.QueryInt("offset")
 
@@ -70,7 +73,7 @@ func (h *LedgerHandler) GetListLedger(c *fiber.Ctx) error {
 func (h *LedgerHandler) GetLedgerByID(c *fiber.Ctx) error {
 	id := c.Params("id")
 
-	res, err := h.usecase.GetLedgerByID(c.Context(), id)
+	res, err := h.usecase.GetLedgerByID(c.Context(), id, utils.GetCurrentUser(c).UserID)
 	if err != nil {
 		return response.ErrorHandler(err)
 	}

@@ -28,9 +28,9 @@ type LedgerUsecase interface {
 	// Returns the list of ledger entries and any error encountered during the process.
 	GetListLedger(ctx context.Context, userID string, limit int32, offset int32) ([]sqlc.Ledger, error)
 
-	// GetLedgerByID retrieves a ledger entry by its ID.
+	// GetLedgerByID retrieves a ledger entry by its ID, only if it belongs to userID.
 	// Returns the ledger entry and any error encountered during the process.
-	GetLedgerByID(ctx context.Context, ledgerID string) (*sqlc.Ledger, error)
+	GetLedgerByID(ctx context.Context, ledgerID string, userID string) (*sqlc.Ledger, error)
 }
 
 // ledgerUsecase implements the LedgerUsecase interface.
@@ -46,13 +46,18 @@ func NewLedgerUsecase(repo postgresql.Repository) LedgerUsecase {
 }
 
 // GetLedgerByID implements LedgerUsecase.
-func (a *ledgerUsecase) GetLedgerByID(ctx context.Context, ledgerID string) (*sqlc.Ledger, error) {
+func (a *ledgerUsecase) GetLedgerByID(ctx context.Context, ledgerID string, userID string) (*sqlc.Ledger, error) {
 	ledger, err := a.repo.GetLedgerByID(ctx, ledgerID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, response.NewError(http.StatusNotFound, ErrLedgerNotFound)
 		}
 		return nil, err
+	}
+
+	// Another user's entry looks the same as a missing one, so IDs can't be probed.
+	if ledger.UserID != userID {
+		return nil, response.NewError(http.StatusNotFound, ErrLedgerNotFound)
 	}
 
 	return &ledger, nil
@@ -90,41 +95,41 @@ func (a *ledgerUsecase) GetBalance(ctx context.Context, userID string) (*int64, 
 	return &balance, nil
 }
 
-// validateUser checks if the user exists in the system
-func (a *ledgerUsecase) validateUser(ctx context.Context, userID string) error {
-	if _, err := a.repo.GetUserByID(ctx, userID); err != nil {
-		return fmt.Errorf("invalid user: %w", err)
-	}
-	return nil
-}
-
 func (a *ledgerUsecase) CreateLedger(ctx context.Context, arg sqlc.CreateLedgerParams) (*sqlc.Ledger, error) {
-	// Validate user existence
-	if err := a.validateUser(ctx, arg.UserID); err != nil {
-		return nil, err
-	}
+	var ledgerData sqlc.Ledger
 
-	// Get current balance, defaulting to 0 if not found
-	currentBalance, err := a.repo.GetBalanceByUser(ctx, arg.UserID)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("failed to get balance: %w", err)
-	}
+	err := a.repo.ExecTx(ctx, func(q sqlc.Querier) error {
+		// Lock the user row so concurrent entries for the same user run one at a time.
+		// Without it, two requests read the same balance and one update is lost.
+		if _, err := q.GetUserByIDForUpdate(ctx, arg.UserID); err != nil {
+			return fmt.Errorf("invalid user: %w", err)
+		}
 
-	// Prepare new ledger entry
-	newLedger := sqlc.CreateLedgerParams{
-		ID:          utils.GenerateCUID(),
-		UserID:      arg.UserID,
-		Type:        arg.Type,
-		Description: arg.Description,
-		Current:     currentBalance,
-		Add:         arg.Add,
-		Final:       currentBalance + arg.Add,
-	}
+		// The latest entry holds the current balance; a user with no entries starts at 0, seq 0.
+		latest, err := q.GetLatestLedgerByUser(ctx, arg.UserID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("failed to get balance: %w", err)
+		}
 
-	// Create ledger entry in database
-	ledgerData, err := a.repo.CreateLedger(ctx, newLedger)
+		newLedger := sqlc.CreateLedgerParams{
+			ID:          utils.GenerateCUID(),
+			UserID:      arg.UserID,
+			Type:        arg.Type,
+			Description: arg.Description,
+			Current:     latest.Final,
+			Add:         arg.Add,
+			Final:       latest.Final + arg.Add,
+			Seq:         latest.Seq + 1,
+		}
+
+		ledgerData, err = q.CreateLedger(ctx, newLedger)
+		if err != nil {
+			return fmt.Errorf("failed to create ledger: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create ledger: %w", err)
+		return nil, err
 	}
 
 	return &ledgerData, nil

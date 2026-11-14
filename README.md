@@ -45,6 +45,7 @@ erDiagram
         bigint current "balance before this entry"
         bigint add "signed amount of this entry"
         bigint final "balance after this entry"
+        bigint seq "per-user entry number, UNIQUE (user_id, seq)"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -76,7 +77,8 @@ Defined in [`db/migrations/000002_create_ledger_table.up.sql`](db/migrations/000
 | `current`     | `bigint`      | balance **before** this entry                               |
 | `add`         | `bigint`      | amount of this entry (negative for money leaving)           |
 | `final`       | `bigint`      | balance **after** this entry, always `current + add`        |
-| `created_at`  | `timestamptz` | defaults to `now()`, used to find the latest entry          |
+| `seq`         | `bigint`      | per-user entry number (1, 2, 3...), `UNIQUE (user_id, seq)`, added in [`000003`](db/migrations/000003_add_ledger_seq.up.sql) |
+| `created_at`  | `timestamptz` | defaults to `now()`                                         |
 | `updated_at`  | `timestamptz` | defaults to `now()`                                         |
 
 ### Design decisions
@@ -90,11 +92,13 @@ Defined in [`db/migrations/000002_create_ledger_table.up.sql`](db/migrations/000
   SELECT final
   FROM ledger
   WHERE user_id = $1
-  ORDER BY created_at DESC
+  ORDER BY seq DESC
   LIMIT 1;
   ```
 
   A user with no ledger rows has a balance of `0`.
+- **"Latest" means highest `seq`, not newest `created_at`.** `created_at` defaults to `now()`, which Postgres fixes when a transaction *starts*. Under concurrency, a transaction that started earlier can commit later, so ordering by `created_at` picked a stale row and lost updates. A per-user `seq` follows the real write order.
+- **One writer per user at a time.** Writing an entry locks the user's row (`SELECT ... FOR UPDATE`) inside a transaction, so concurrent requests for the same user line up instead of reading the same balance. `UNIQUE (user_id, seq)` is the safety net: if two writers ever got past the lock, Postgres would reject one instead of silently losing money.
 - **Money as integers.** Amounts are `bigint` (for example the smallest currency unit such as cents or rupiah) to avoid floating point rounding errors.
 - **Typed transactions.** A Postgres `ENUM` restricts `type` to the four known kinds of movement.
 - **Ownership through a foreign key.** Every ledger row belongs to a user, and deleting a user cascades to their ledger.
@@ -123,20 +127,22 @@ sequenceDiagram
     participant U as LedgerUsecase
     participant DB as Postgres
 
-    C->>H: POST /api/v1/ledgers {user_id, type, description, add}
+    C->>H: POST /api/v1/ledgers {type, description, add} + Bearer token
+    Note over H: user_id comes from the token, never the body
     H->>U: CreateLedger(params)
-    U->>DB: GetUserByID(user_id)
-    DB-->>U: user (or error -> reject)
-    U->>DB: GetBalanceByUser(user_id)
-    DB-->>U: latest final (or no rows -> 0)
-    Note over U: current = latest final<br/>final = current + add
+    U->>DB: BEGIN
+    U->>DB: GetUserByIDForUpdate(user_id)
+    DB-->>U: user row locked (or error -> rollback)
+    U->>DB: GetLatestLedgerByUser(user_id)
+    DB-->>U: latest row (or no rows -> final 0, seq 0)
+    Note over U: current = latest final<br/>final = current + add<br/>seq = latest seq + 1
     U->>DB: INSERT INTO ledger (...)
-    DB-->>U: new row
+    U->>DB: COMMIT (releases the lock)
     U-->>H: ledger
     H-->>C: 201 Created
 ```
 
-The client only sends the amount (`add`). The server always computes `current` and `final` itself, so the client can never set a balance directly.
+The client only sends the amount (`add`). The server always computes `current`, `final`, and `seq` itself, so the client can never set a balance directly.
 
 ## Project architecture
 
@@ -176,9 +182,9 @@ Base path: `/api/v1`
 | ------ | ------------------- | ------ | --------------------------------------------------- |
 | POST   | `/auth/register`    | -      | Create a user (`email`, `full_name`, `password`)    |
 | POST   | `/auth/login`       | -      | Returns a PASETO token (valid 1 hour) and the user  |
-| POST   | `/ledgers`          | -      | Create a ledger entry (`user_id`, `type`, `description`, `add`) |
-| GET    | `/ledgers`          | -      | List entries: `?user_id=...&offset=<page>&limit=<n>` |
-| GET    | `/ledgers/:id`      | -      | Get one ledger entry                                |
+| POST   | `/ledgers`          | Bearer | Create an entry for the logged-in user (`type`, `description`, `add`) |
+| GET    | `/ledgers`          | Bearer | List your entries: `?offset=<page>&limit=<n>`       |
+| GET    | `/ledgers/:id`      | Bearer | Get one of your entries (another user's is a 404)   |
 | GET    | `/ledgers/balance`  | Bearer | Current balance of the logged-in user               |
 
 Example:
@@ -188,9 +194,13 @@ curl -X POST localhost:8002/api/v1/auth/register \
   -d '{"email":"me@example.com","full_name":"Me","password":"secret"}' \
   -H 'Content-Type: application/json'
 
+TOKEN=$(curl -s -X POST localhost:8002/api/v1/auth/login \
+  -d '{"email":"me@example.com","password":"secret"}' \
+  -H 'Content-Type: application/json' | jq -r .data.token)
+
 curl -X POST localhost:8002/api/v1/ledgers \
-  -d '{"user_id":"<user id>","type":"deposit","description":"Top up","add":100000}' \
-  -H 'Content-Type: application/json'
+  -d '{"type":"deposit","description":"Top up","add":100000}' \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Running it locally
@@ -204,23 +214,24 @@ make migrate.up          # create the users and ledger tables
 make run                 # start the API
 ```
 
+Tests: the ledger concurrency test runs against a real, migrated database and is skipped otherwise.
+
+```bash
+TEST_DATABASE_URL="postgres://postgres:secret@localhost:5433/balance_ledger?sslmode=disable" go test ./...
+```
+
 Other targets: `make migrate.down`, `make docker.down`, `make docker.build`, `make sqlc` (regenerate Go code from `db/query`).
 
 ## Learning notes and known gaps
 
 Things I noticed while building this, and what I would study or change next. Keeping them here is part of the learning.
 
-- **Race condition on concurrent writes.** `CreateLedger` reads the latest balance and then inserts in two separate statements with no transaction or lock. Two requests for the same user at the same time can both read the same `current` and one update is effectively lost. Next step: wrap it in a transaction and lock per user (for example `SELECT ... FROM users WHERE id = $1 FOR UPDATE`), or add a per-user sequence number with a unique constraint.
-- **"Latest row" depends on `created_at`.** Two rows with the same timestamp make the latest balance ambiguous. A monotonic per-user sequence column would be more reliable.
-- **No index for the hot query.** `GetBalanceByUser` and `ListLedgerByUser` would benefit from an index on `ledger (user_id, created_at DESC)`.
+- **Fixed so far:** the lost-update race, ambiguous "latest" row, password hash in the register response, unauthenticated ledger access, and the catalog-corrupting down migration. See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full checklist.
 - **No balance rules enforced.** Nothing stops a withdrawal from making `final` negative, and the sign of `add` is not checked against `type`. A `CHECK (final = current + add)` and a `CHECK (final >= 0)` constraint would push these rules into the database.
 - **Ledger rows are mutable.** `UpdateLedger` and `DeleteLedger` queries exist, which goes against the append-only idea. A real ledger would correct mistakes with a new reversing entry instead.
 - **Route order.** `GET /ledgers/:id` is registered before `GET /ledgers/balance`, so the `balance` path can be captured by `:id`.
 - **Pagination naming.** The `offset` query param is actually used as a page number (`OFFSET (page - 1) * limit`), and `0` produces a negative offset.
-- **Ledger endpoints are mostly unauthenticated** and `POST /ledgers` trusts `user_id` from the request body.
 - **PASETO key is hardcoded** in `internal/token/paseto.go` instead of read from the environment.
-- **Duplicate generated code.** The app imports `db/sqlc`, while `sqlc.yaml` writes to `internal/postgresql/sqlc`.
-- **Down migration** removes the enum by deleting from `pg_type` before dropping the table; `DROP TABLE` then `DROP TYPE type_enum` is the clean way.
 
 ## Tech stack
 

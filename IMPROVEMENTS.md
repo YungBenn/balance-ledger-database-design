@@ -6,10 +6,10 @@ Bugs, improvements, and refactors found while reviewing this learning project. F
 
 ### Critical
 
-- [ ] **Password hash leaks on register.** `Register` returns the raw `sqlc.User`, whose `Password` field has a `json:"password"` tag (`db/sqlc/models.go:73`), so the bcrypt hash is sent back to the client.
-- [ ] **Lost update race in `CreateLedger`.** `internal/ledger/usecase.go` reads the latest balance and then inserts in two separate steps, with no transaction or lock. Two simultaneous requests for the same user both read the same `current`, and one change is lost.
-- [ ] **Down migration corrupts the catalog.** `db/migrations/000002_create_ledger_table.down.sql` deletes the enum from `pg_type` while `ledger` still uses it, then drops the table. Fix: `DROP TABLE ledger;` then `DROP TYPE type_enum;`.
-- [ ] **No authorization on ledger endpoints.** `POST /ledgers` trusts `user_id` from the body, and `GET /ledgers?user_id=` and `GET /ledgers/:id` need no login, so anyone can read or write anyone's ledger.
+- [x] **Password hash leaks on register.** `Register` returns the raw `sqlc.User`, whose `Password` field has a `json:"password"` tag (`db/sqlc/models.go:73`), so the bcrypt hash is sent back to the client.
+- [x] **Lost update race in `CreateLedger`.** `internal/ledger/usecase.go` reads the latest balance and then inserts in two separate steps, with no transaction or lock. Two simultaneous requests for the same user both read the same `current`, and one change is lost.
+- [x] **Down migration corrupts the catalog.** `db/migrations/000002_create_ledger_table.down.sql` deletes the enum from `pg_type` while `ledger` still uses it, then drops the table. Fix: `DROP TABLE ledger;` then `DROP TYPE type_enum;`.
+- [x] **No authorization on ledger endpoints.** `POST /ledgers` trusts `user_id` from the body, and `GET /ledgers?user_id=` and `GET /ledgers/:id` need no login, so anyone can read or write anyone's ledger.
 
 ### Logic
 
@@ -22,7 +22,7 @@ Bugs, improvements, and refactors found while reviewing this learning project. F
   - [ ] `ListLedgerByUser` has no `ORDER BY`, so the order between pages isn't guaranteed.
 - [ ] **Balance can go negative.** Nothing rejects a withdrawal larger than the current balance.
 - [ ] **The sign of `add` isn't checked against `type`.** A `deposit` of -500 or a `withdrawal` of +500 is accepted.
-- [ ] **"Latest balance" can be ambiguous.** `GetBalanceByUser` orders by `created_at`, so two entries with the same timestamp give an unpredictable result.
+- [x] **"Latest balance" can be ambiguous.** `GetBalanceByUser` orders by `created_at`, so two entries with the same timestamp give an unpredictable result.
 - [ ] **Every `CreateLedger` failure is a 500.** It returns plain `fmt.Errorf` errors, so an unknown user, which should be a 400 or 404, also comes back as a 500.
 - [ ] **A bad `type` value is a 500 instead of a 400.** It isn't validated before Postgres rejects it.
 - [ ] **Registration ignores database errors.** `Register` discards the error from `GetUserByEmail` (`internal/auth/usecase.go:68`). Two simultaneous sign-ups with the same email both pass the check, and the unique violation comes back as a 500.
@@ -40,17 +40,17 @@ Bugs, improvements, and refactors found while reviewing this learning project. F
 - [ ] Make ledger rows permanent: remove the `UpdateLedger` and `DeleteLedger` queries and fix mistakes with a new reversing entry.
 - [ ] Add `CHECK (final = current + add)`.
 - [ ] Add `CHECK (final >= 0)`.
-- [ ] Add a per-user sequence number with `UNIQUE (user_id, seq)`. This settles which entry is latest and blocks the lost-update race.
-- [ ] Or lock the user row (`SELECT ... FROM users WHERE id = $1 FOR UPDATE`) inside a transaction while writing an entry.
-- [ ] Add an index on `ledger (user_id, created_at DESC)`, or on `(user_id, seq)` if you add the sequence.
+- [x] Add a per-user sequence number with `UNIQUE (user_id, seq)`. This settles which entry is latest and blocks the lost-update race.
+- [x] Or lock the user row (`SELECT ... FROM users WHERE id = $1 FOR UPDATE`) inside a transaction while writing an entry. (Did both: the lock serializes writers, the unique `seq` is the safety net.)
+- [x] Add an index on `ledger (user_id, created_at DESC)`, or on `(user_id, seq)` if you add the sequence. (Covered by the `UNIQUE (user_id, seq)` index.)
 - [ ] Add an idempotency key so a retried request doesn't create the same entry twice.
 - [ ] Drop `updated_at` from `ledger` once rows are no longer edited.
 
 ## Refactors: code
 
-- [ ] **Keep one sqlc output folder.** `sqlc.yaml` writes to `internal/postgresql/sqlc`, but the app imports `db/sqlc`, so `make sqlc` updates code nobody uses.
+- [x] **Keep one sqlc output folder.** `sqlc.yaml` writes to `internal/postgresql/sqlc`, but the app imports `db/sqlc`, so `make sqlc` updates code nobody uses.
 - [ ] **Name the pagination params** with `sqlc.arg(page)` and `sqlc.arg(page_size)` instead of the generated `Column2 interface{}`.
-- [ ] **Add transaction support to the repository.** `SQLRepository` already holds the `db` pool but never uses it.
+- [x] **Add transaction support to the repository.** `SQLRepository` already holds the `db` pool but never uses it.
 - [ ] **Use request and response types instead of `sqlc` types in handlers.** `internal/ledger/dto.go` is empty. This also fixes the password-hash leak.
 - [ ] **Validate input at the handler.**
   - [ ] Email format
@@ -65,4 +65,4 @@ Bugs, improvements, and refactors found while reviewing this learning project. F
 - [ ] **Pin the Go version in the Dockerfile** (`golang:1.22-alpine`).
 - [ ] **Add tests.**
   - [ ] Integration test for `CreateLedger` that checks the balance chain stays consistent (`row[n].current = row[n-1].final`).
-  - [ ] Concurrency test that sends simultaneous `CreateLedger` requests to catch the lost-update race.
+  - [x] Concurrency test that sends simultaneous `CreateLedger` requests to catch the lost-update race.

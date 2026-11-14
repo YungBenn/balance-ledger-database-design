@@ -15,7 +15,7 @@ import (
 )
 
 type AuthUsecase interface {
-	Register(ctx context.Context, arg sqlc.CreateUserParams) (*sqlc.User, error)
+	Register(ctx context.Context, arg sqlc.CreateUserParams) (*UserData, error)
 	Login(ctx context.Context, arg LoginRequest) (*LoginResponse, error)
 }
 
@@ -64,7 +64,7 @@ func (a *authUsecase) Login(ctx context.Context, arg LoginRequest) (*LoginRespon
 }
 
 // Register implements AuthUsecase.
-func (a *authUsecase) Register(ctx context.Context, arg sqlc.CreateUserParams) (*sqlc.User, error) {
+func (a *authUsecase) Register(ctx context.Context, arg sqlc.CreateUserParams) (*UserData, error) {
 	user, _ := a.repo.GetUserByEmail(ctx, arg.Email)
 	if user.Email != "" {
 		return nil, response.NewError(http.StatusBadRequest, ErrEmailExist)
@@ -87,5 +87,12 @@ func (a *authUsecase) Register(ctx context.Context, arg sqlc.CreateUserParams) (
 		return nil, response.NewError(http.StatusInternalServerError, err)
 	}
 
-	return &user, nil
+	// UserData has no password field, so the hash never reaches the client.
+	return &UserData{
+		ID:        user.ID,
+		Email:     user.Email,
+		FullName:  user.FullName,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+	}, nil
 }
