@@ -125,6 +125,9 @@ func (a *ledgerUsecase) CreateLedger(ctx context.Context, arg sqlc.CreateLedgerP
 	if err := validateEntry(arg.Type, arg.Add); err != nil {
 		return nil, err
 	}
+	if len(arg.IdempotencyKey.String) > 255 {
+		return nil, response.NewError(http.StatusBadRequest, ErrInvalidIdemKey)
+	}
 
 	id, err := utils.GenerateCUID()
 	if err != nil {
@@ -143,6 +146,24 @@ func (a *ledgerUsecase) CreateLedger(ctx context.Context, arg sqlc.CreateLedgerP
 			return fmt.Errorf("failed to lock user: %w", err)
 		}
 
+		// A retry with the same key returns the original entry. Checked under the lock,
+		// so concurrent retries can't both miss it.
+		if arg.IdempotencyKey.Valid {
+			existing, err := q.GetLedgerByIdempotencyKey(ctx, sqlc.GetLedgerByIdempotencyKeyParams{
+				UserID: arg.UserID, IdempotencyKey: arg.IdempotencyKey,
+			})
+			if err == nil {
+				if existing.Type != arg.Type || existing.Add != arg.Add || existing.Description != arg.Description {
+					return response.NewError(http.StatusConflict, ErrIdemKeyReused)
+				}
+				ledgerData = existing
+				return nil
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("failed to check idempotency key: %w", err)
+			}
+		}
+
 		// The latest entry holds the current balance; a user with no entries starts at 0, seq 0.
 		latest, err := q.GetLatestLedgerByUser(ctx, arg.UserID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -155,14 +176,15 @@ func (a *ledgerUsecase) CreateLedger(ctx context.Context, arg sqlc.CreateLedgerP
 		}
 
 		newLedger := sqlc.CreateLedgerParams{
-			ID:          id,
-			UserID:      arg.UserID,
-			Type:        arg.Type,
-			Description: arg.Description,
-			Current:     latest.Final,
-			Add:         arg.Add,
-			Final:       latest.Final + arg.Add,
-			Seq:         latest.Seq + 1,
+			ID:             id,
+			UserID:         arg.UserID,
+			Type:           arg.Type,
+			Description:    arg.Description,
+			Current:        latest.Final,
+			Add:            arg.Add,
+			Final:          latest.Final + arg.Add,
+			Seq:            latest.Seq + 1,
+			IdempotencyKey: arg.IdempotencyKey,
 		}
 
 		ledgerData, err = q.CreateLedger(ctx, newLedger)

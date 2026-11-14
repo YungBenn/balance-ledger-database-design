@@ -46,8 +46,8 @@ erDiagram
         bigint add "signed amount of this entry"
         bigint final "balance after this entry"
         bigint seq "per-user entry number, UNIQUE (user_id, seq)"
+        varchar idempotency_key "optional, UNIQUE (user_id, idempotency_key)"
         timestamptz created_at
-        timestamptz updated_at
     }
 ```
 
@@ -76,14 +76,18 @@ Defined in [`db/migrations/000002_create_ledger_table.up.sql`](db/migrations/000
 | `description` | `varchar`     | human-readable reason for the entry                         |
 | `current`     | `bigint`      | balance **before** this entry                               |
 | `add`         | `bigint`      | amount of this entry (negative for money leaving)           |
-| `final`       | `bigint`      | balance **after** this entry, always `current + add`        |
+| `final`       | `bigint`      | balance **after** this entry; `CHECK (final = current + add)` and `CHECK (final >= 0)` |
 | `seq`         | `bigint`      | per-user entry number (1, 2, 3...), `UNIQUE (user_id, seq)`, added in [`000003`](db/migrations/000003_add_ledger_seq.up.sql) |
+| `idempotency_key` | `varchar` | optional key from the `Idempotency-Key` header, `UNIQUE (user_id, idempotency_key)` |
 | `created_at`  | `timestamptz` | defaults to `now()`                                         |
-| `updated_at`  | `timestamptz` | defaults to `now()`                                         |
+
+There is no `updated_at`: entries are never updated. Constraints, the idempotency key, and the no-update trigger were added in [`000004`](db/migrations/000004_harden_ledger.up.sql).
 
 ### Design decisions
 
-- **Append-only history.** A balance change is a new row, not an `UPDATE`. The full history of how a balance got to its value is always in the table.
+- **Append-only history.** A balance change is a new row, not an `UPDATE`. The full history of how a balance got to its value is always in the table. A `BEFORE UPDATE` trigger makes Postgres reject any edit, so a mistake is corrected with a new entry (for example a `refund`). `DELETE` is still allowed, so deleting a user cascades to their entries.
+- **The database enforces the math.** `CHECK (final = current + add)` and `CHECK (final >= 0)` mean even a buggy app or a manual `INSERT` can't store an inconsistent or negative balance. The app checks the same rules first to return a clear `400`.
+- **Safe retries.** If a client sends an `Idempotency-Key` header and retries after a timeout, the original entry is returned instead of creating a second one. The lookup runs under the same user lock, and `UNIQUE (user_id, idempotency_key)` is the backstop.
 - **Snapshot of before and after on every row.** Storing `current`, `add`, and `final` means each row is self-describing. You can verify any row on its own (`final = current + add`) and verify the chain (`row[n].current = row[n-1].final`).
 - **Balance is derived, not stored.** There is no `balance` column on `users`. The current balance is read from the most recent ledger row:
 
@@ -133,6 +137,10 @@ sequenceDiagram
     U->>DB: BEGIN
     U->>DB: GetUserByIDForUpdate(user_id)
     DB-->>U: user row locked (or error -> rollback)
+    opt Idempotency-Key header sent
+        U->>DB: GetLedgerByIdempotencyKey(user_id, key)
+        DB-->>U: existing row -> return it (409 if the request differs)
+    end
     U->>DB: GetLatestLedgerByUser(user_id)
     DB-->>U: latest row (or no rows -> final 0, seq 0)
     Note over U: current = latest final<br/>final = current + add<br/>seq = latest seq + 1
@@ -193,6 +201,8 @@ Rules for `POST /ledgers`, each rejected with `400`:
 - `add` must not be `0`. It must be positive for `deposit` and `refund`, and negative for `withdrawal` and `purchase`.
 - The resulting balance must not go below `0`. This is checked while the user's row is locked, so two concurrent withdrawals can't both pass.
 
+Send an optional `Idempotency-Key` header (max 255 characters) to make retries safe: the same key with the same request returns the original entry with `201`, and the same key with a different request returns `409`.
+
 Errors always look like `{"status": <code>, "message": "..."}`. For `500` errors the message is just `internal server error`; the real cause is logged on the server.
 
 Example:
@@ -234,9 +244,8 @@ Other targets: `make migrate.down`, `make docker.down`, `make docker.build`, `ma
 
 Things I noticed while building this, and what I would study or change next. Keeping them here is part of the learning.
 
-- **Fixed so far:** the critical bugs (lost-update race, password hash in the register response, unauthenticated ledger access, catalog-corrupting down migration) and the logic bugs (route order, pagination, overdrafts, sign vs type, error handling). See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full checklist.
-- **Balance rules live only in the app.** Overdrafts and wrong signs are rejected in Go, but the database itself would still accept them. `CHECK (final = current + add)` and `CHECK (final >= 0)` constraints would make Postgres enforce them too.
-- **Ledger rows are mutable.** `UpdateLedger` and `DeleteLedger` queries exist, which goes against the append-only idea. A real ledger would correct mistakes with a new reversing entry instead.
+- **Fixed so far:** the critical bugs (lost-update race, password hash in the register response, unauthenticated ledger access, catalog-corrupting down migration) and the logic bugs (route order, pagination, overdrafts, sign vs type, error handling), and the database design items (CHECK constraints, append-only trigger, idempotency key). See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full checklist.
+- **Sign vs type lives only in the app.** Postgres enforces the balance math and non-negative balances, but not that a `deposit` is positive. A `CHECK` on `type` and `add` could cover that too.
 - **PASETO key is hardcoded** in `internal/token/paseto.go` instead of read from the environment.
 
 ## Tech stack

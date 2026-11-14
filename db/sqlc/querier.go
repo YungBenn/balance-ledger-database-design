@@ -11,17 +11,16 @@ import (
 type Querier interface {
 	CreateLedger(ctx context.Context, arg CreateLedgerParams) (Ledger, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
-	DeleteLedger(ctx context.Context, id string) error
 	DeleteUser(ctx context.Context, id string) error
 	GetBalanceByUser(ctx context.Context, userID string) (int64, error)
 	GetLatestLedgerByUser(ctx context.Context, userID string) (Ledger, error)
 	GetLedgerByID(ctx context.Context, id string) (Ledger, error)
+	GetLedgerByIdempotencyKey(ctx context.Context, arg GetLedgerByIdempotencyKeyParams) (Ledger, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id string) (User, error)
 	GetUserByIDForUpdate(ctx context.Context, id string) (User, error)
 	ListLedgerByUser(ctx context.Context, arg ListLedgerByUserParams) ([]Ledger, error)
 	ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error)
-	UpdateLedger(ctx context.Context, arg UpdateLedgerParams) (Ledger, error)
 	UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error)
 }
 

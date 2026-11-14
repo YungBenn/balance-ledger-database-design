@@ -37,14 +37,14 @@ Bugs, improvements, and refactors found while reviewing this learning project. F
 
 ## Improvements: database design
 
-- [ ] Make ledger rows permanent: remove the `UpdateLedger` and `DeleteLedger` queries and fix mistakes with a new reversing entry.
-- [ ] Add `CHECK (final = current + add)`.
-- [ ] Add `CHECK (final >= 0)`.
+- [x] Make ledger rows permanent: remove the `UpdateLedger` and `DeleteLedger` queries and fix mistakes with a new reversing entry. (Also a trigger rejects `UPDATE` in Postgres.)
+- [x] Add `CHECK (final = current + add)`.
+- [x] Add `CHECK (final >= 0)`.
 - [x] Add a per-user sequence number with `UNIQUE (user_id, seq)`. This settles which entry is latest and blocks the lost-update race.
 - [x] Or lock the user row (`SELECT ... FROM users WHERE id = $1 FOR UPDATE`) inside a transaction while writing an entry. (Did both: the lock serializes writers, the unique `seq` is the safety net.)
 - [x] Add an index on `ledger (user_id, created_at DESC)`, or on `(user_id, seq)` if you add the sequence. (Covered by the `UNIQUE (user_id, seq)` index.)
-- [ ] Add an idempotency key so a retried request doesn't create the same entry twice.
-- [ ] Drop `updated_at` from `ledger` once rows are no longer edited.
+- [x] Add an idempotency key so a retried request doesn't create the same entry twice.
+- [x] Drop `updated_at` from `ledger` once rows are no longer edited.
 
 ## Refactors: code
 

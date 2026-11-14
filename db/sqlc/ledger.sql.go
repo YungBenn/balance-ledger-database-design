@@ -7,6 +7,8 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createLedger = `-- name: CreateLedger :one
@@ -18,21 +20,23 @@ INSERT INTO ledger (
         current,
         ADD,
         final,
-        seq
+        seq,
+        idempotency_key
     )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, user_id, type, description, current, add, final, created_at, updated_at, seq
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, user_id, type, description, current, add, final, created_at, seq, idempotency_key
 `
 
 type CreateLedgerParams struct {
-	ID          string   `json:"id"`
-	UserID      string   `json:"user_id"`
-	Type        TypeEnum `json:"type"`
-	Description string   `json:"description"`
-	Current     int64    `json:"current"`
-	Add         int64    `json:"add"`
-	Final       int64    `json:"final"`
-	Seq         int64    `json:"seq"`
+	ID             string      `json:"id"`
+	UserID         string      `json:"user_id"`
+	Type           TypeEnum    `json:"type"`
+	Description    string      `json:"description"`
+	Current        int64       `json:"current"`
+	Add            int64       `json:"add"`
+	Final          int64       `json:"final"`
+	Seq            int64       `json:"seq"`
+	IdempotencyKey pgtype.Text `json:"idempotency_key"`
 }
 
 func (q *Queries) CreateLedger(ctx context.Context, arg CreateLedgerParams) (Ledger, error) {
@@ -45,6 +49,7 @@ func (q *Queries) CreateLedger(ctx context.Context, arg CreateLedgerParams) (Led
 		arg.Add,
 		arg.Final,
 		arg.Seq,
+		arg.IdempotencyKey,
 	)
 	var i Ledger
 	err := row.Scan(
@@ -56,20 +61,10 @@ func (q *Queries) CreateLedger(ctx context.Context, arg CreateLedgerParams) (Led
 		&i.Add,
 		&i.Final,
 		&i.CreatedAt,
-		&i.UpdatedAt,
 		&i.Seq,
+		&i.IdempotencyKey,
 	)
 	return i, err
-}
-
-const deleteLedger = `-- name: DeleteLedger :exec
-DELETE FROM ledger
-WHERE id = $1
-`
-
-func (q *Queries) DeleteLedger(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteLedger, id)
-	return err
 }
 
 const getBalanceByUser = `-- name: GetBalanceByUser :one
@@ -88,7 +83,7 @@ func (q *Queries) GetBalanceByUser(ctx context.Context, userID string) (int64, e
 }
 
 const getLatestLedgerByUser = `-- name: GetLatestLedgerByUser :one
-SELECT id, user_id, type, description, current, add, final, created_at, updated_at, seq
+SELECT id, user_id, type, description, current, add, final, created_at, seq, idempotency_key
 FROM ledger
 WHERE user_id = $1
 ORDER BY seq DESC
@@ -107,14 +102,14 @@ func (q *Queries) GetLatestLedgerByUser(ctx context.Context, userID string) (Led
 		&i.Add,
 		&i.Final,
 		&i.CreatedAt,
-		&i.UpdatedAt,
 		&i.Seq,
+		&i.IdempotencyKey,
 	)
 	return i, err
 }
 
 const getLedgerByID = `-- name: GetLedgerByID :one
-SELECT id, user_id, type, description, current, add, final, created_at, updated_at, seq
+SELECT id, user_id, type, description, current, add, final, created_at, seq, idempotency_key
 FROM ledger
 WHERE id = $1
 LIMIT 1
@@ -132,14 +127,45 @@ func (q *Queries) GetLedgerByID(ctx context.Context, id string) (Ledger, error) 
 		&i.Add,
 		&i.Final,
 		&i.CreatedAt,
-		&i.UpdatedAt,
 		&i.Seq,
+		&i.IdempotencyKey,
+	)
+	return i, err
+}
+
+const getLedgerByIdempotencyKey = `-- name: GetLedgerByIdempotencyKey :one
+SELECT id, user_id, type, description, current, add, final, created_at, seq, idempotency_key
+FROM ledger
+WHERE user_id = $1
+    AND idempotency_key = $2
+LIMIT 1
+`
+
+type GetLedgerByIdempotencyKeyParams struct {
+	UserID         string      `json:"user_id"`
+	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+}
+
+func (q *Queries) GetLedgerByIdempotencyKey(ctx context.Context, arg GetLedgerByIdempotencyKeyParams) (Ledger, error) {
+	row := q.db.QueryRow(ctx, getLedgerByIdempotencyKey, arg.UserID, arg.IdempotencyKey)
+	var i Ledger
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Type,
+		&i.Description,
+		&i.Current,
+		&i.Add,
+		&i.Final,
+		&i.CreatedAt,
+		&i.Seq,
+		&i.IdempotencyKey,
 	)
 	return i, err
 }
 
 const listLedgerByUser = `-- name: ListLedgerByUser :many
-SELECT id, user_id, type, description, current, add, final, created_at, updated_at, seq
+SELECT id, user_id, type, description, current, add, final, created_at, seq, idempotency_key
 FROM ledger
 WHERE user_id = $1
 ORDER BY seq DESC
@@ -170,8 +196,8 @@ func (q *Queries) ListLedgerByUser(ctx context.Context, arg ListLedgerByUserPara
 			&i.Add,
 			&i.Final,
 			&i.CreatedAt,
-			&i.UpdatedAt,
 			&i.Seq,
+			&i.IdempotencyKey,
 		); err != nil {
 			return nil, err
 		}
@@ -181,53 +207,4 @@ func (q *Queries) ListLedgerByUser(ctx context.Context, arg ListLedgerByUserPara
 		return nil, err
 	}
 	return items, nil
-}
-
-const updateLedger = `-- name: UpdateLedger :one
-UPDATE ledger
-SET user_id = $2,
-    TYPE = $3,
-    description = $4,
-    current = $5,
-    ADD = $6,
-    final = $7,
-    updated_at = NOW()
-WHERE id = $1
-RETURNING id, user_id, type, description, current, add, final, created_at, updated_at, seq
-`
-
-type UpdateLedgerParams struct {
-	ID          string   `json:"id"`
-	UserID      string   `json:"user_id"`
-	Type        TypeEnum `json:"type"`
-	Description string   `json:"description"`
-	Current     int64    `json:"current"`
-	Add         int64    `json:"add"`
-	Final       int64    `json:"final"`
-}
-
-func (q *Queries) UpdateLedger(ctx context.Context, arg UpdateLedgerParams) (Ledger, error) {
-	row := q.db.QueryRow(ctx, updateLedger,
-		arg.ID,
-		arg.UserID,
-		arg.Type,
-		arg.Description,
-		arg.Current,
-		arg.Add,
-		arg.Final,
-	)
-	var i Ledger
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.Type,
-		&i.Description,
-		&i.Current,
-		&i.Add,
-		&i.Final,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Seq,
-	)
-	return i, err
 }

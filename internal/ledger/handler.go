@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type LedgerHandler struct {
@@ -29,6 +30,9 @@ func (h *LedgerHandler) CreateLedger(c *fiber.Ctx) error {
 
 	// Always write to the logged-in user, never to a user_id from the body.
 	arg.UserID = user.UserID
+	// The idempotency key only comes from the header.
+	key := c.Get("Idempotency-Key")
+	arg.IdempotencyKey = pgtype.Text{String: key, Valid: key != ""}
 
 	res, err := h.usecase.CreateLedger(c.Context(), arg)
 	if err != nil {

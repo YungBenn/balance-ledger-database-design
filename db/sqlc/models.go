@@ -8,6 +8,8 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type TypeEnum string
@@ -55,16 +57,16 @@ func (ns NullTypeEnum) Value() (driver.Value, error) {
 }
 
 type Ledger struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"user_id"`
-	Type        TypeEnum  `json:"type"`
-	Description string    `json:"description"`
-	Current     int64     `json:"current"`
-	Add         int64     `json:"add"`
-	Final       int64     `json:"final"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	Seq         int64     `json:"seq"`
+	ID             string      `json:"id"`
+	UserID         string      `json:"user_id"`
+	Type           TypeEnum    `json:"type"`
+	Description    string      `json:"description"`
+	Current        int64       `json:"current"`
+	Add            int64       `json:"add"`
+	Final          int64       `json:"final"`
+	CreatedAt      time.Time   `json:"created_at"`
+	Seq            int64       `json:"seq"`
+	IdempotencyKey pgtype.Text `json:"idempotency_key"`
 }
 
 type User struct {

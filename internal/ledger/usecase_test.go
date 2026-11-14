@@ -11,6 +11,8 @@ import (
 	"os"
 	"sync"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestValidateEntry(t *testing.T) {
@@ -135,5 +137,41 @@ func TestCreateLedgerRejectsOverdraft(t *testing.T) {
 	}
 	if *balance != 100 {
 		t.Fatalf("balance = %d, want 100", *balance)
+	}
+}
+
+func TestCreateLedgerIdempotent(t *testing.T) {
+	uc, userID := newTestUser(t)
+	ctx := context.Background()
+
+	arg := sqlc.CreateLedgerParams{
+		UserID: userID, Type: sqlc.TypeEnumDeposit, Description: "retry", Add: 10,
+		IdempotencyKey: pgtype.Text{String: "key-1", Valid: true},
+	}
+	first, err := uc.CreateLedger(ctx, arg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := uc.CreateLedger(ctx, arg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("retry created a new entry: %s != %s", first.ID, second.ID)
+	}
+
+	balance, err := uc.GetBalance(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *balance != 10 {
+		t.Fatalf("balance = %d, want 10 (retry applied twice)", *balance)
+	}
+
+	arg.Add = 11
+	_, err = uc.CreateLedger(ctx, arg)
+	var re *response.Error
+	if !errors.As(err, &re) || re.Status != http.StatusConflict {
+		t.Fatalf("err = %v, want 409 %v", err, ErrIdemKeyReused)
 	}
 }

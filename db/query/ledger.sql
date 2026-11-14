@@ -20,26 +20,11 @@ INSERT INTO ledger (
         current,
         ADD,
         final,
-        seq
+        seq,
+        idempotency_key
     )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
-
--- name: UpdateLedger :one
-UPDATE ledger
-SET user_id = $2,
-    TYPE = $3,
-    description = $4,
-    current = $5,
-    ADD = $6,
-    final = $7,
-    updated_at = NOW()
-WHERE id = $1
-RETURNING *;
-
--- name: DeleteLedger :exec
-DELETE FROM ledger
-WHERE id = $1;
 
 -- name: GetBalanceByUser :one
 SELECT final
@@ -53,4 +38,11 @@ SELECT *
 FROM ledger
 WHERE user_id = $1
 ORDER BY seq DESC
+LIMIT 1;
+
+-- name: GetLedgerByIdempotencyKey :one
+SELECT *
+FROM ledger
+WHERE user_id = $1
+    AND idempotency_key = $2
 LIMIT 1;
