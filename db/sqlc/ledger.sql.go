@@ -142,17 +142,18 @@ const listLedgerByUser = `-- name: ListLedgerByUser :many
 SELECT id, user_id, type, description, current, add, final, created_at, updated_at, seq
 FROM ledger
 WHERE user_id = $1
-LIMIT $3 OFFSET (($2 - 1) * $3)
+ORDER BY seq DESC
+LIMIT $3 OFFSET $2
 `
 
 type ListLedgerByUserParams struct {
-	UserID  string      `json:"user_id"`
-	Column2 interface{} `json:"column_2"`
-	Limit   int32       `json:"limit"`
+	UserID     string `json:"user_id"`
+	PageOffset int32  `json:"page_offset"`
+	PageSize   int32  `json:"page_size"`
 }
 
 func (q *Queries) ListLedgerByUser(ctx context.Context, arg ListLedgerByUserParams) ([]Ledger, error) {
-	rows, err := q.db.Query(ctx, listLedgerByUser, arg.UserID, arg.Column2, arg.Limit)
+	rows, err := q.db.Query(ctx, listLedgerByUser, arg.UserID, arg.PageOffset, arg.PageSize)
 	if err != nil {
 		return nil, err
 	}

@@ -183,9 +183,17 @@ Base path: `/api/v1`
 | POST   | `/auth/register`    | -      | Create a user (`email`, `full_name`, `password`)    |
 | POST   | `/auth/login`       | -      | Returns a PASETO token (valid 1 hour) and the user  |
 | POST   | `/ledgers`          | Bearer | Create an entry for the logged-in user (`type`, `description`, `add`) |
-| GET    | `/ledgers`          | Bearer | List your entries: `?offset=<page>&limit=<n>`       |
+| GET    | `/ledgers`          | Bearer | List your entries, newest first: `?page=1&limit=10` (limit max 100) |
 | GET    | `/ledgers/:id`      | Bearer | Get one of your entries (another user's is a 404)   |
 | GET    | `/ledgers/balance`  | Bearer | Current balance of the logged-in user               |
+
+Rules for `POST /ledgers`, each rejected with `400`:
+
+- `type` must be `deposit`, `withdrawal`, `refund`, or `purchase`.
+- `add` must not be `0`. It must be positive for `deposit` and `refund`, and negative for `withdrawal` and `purchase`.
+- The resulting balance must not go below `0`. This is checked while the user's row is locked, so two concurrent withdrawals can't both pass.
+
+Errors always look like `{"status": <code>, "message": "..."}`. For `500` errors the message is just `internal server error`; the real cause is logged on the server.
 
 Example:
 
@@ -226,11 +234,9 @@ Other targets: `make migrate.down`, `make docker.down`, `make docker.build`, `ma
 
 Things I noticed while building this, and what I would study or change next. Keeping them here is part of the learning.
 
-- **Fixed so far:** the lost-update race, ambiguous "latest" row, password hash in the register response, unauthenticated ledger access, and the catalog-corrupting down migration. See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full checklist.
-- **No balance rules enforced.** Nothing stops a withdrawal from making `final` negative, and the sign of `add` is not checked against `type`. A `CHECK (final = current + add)` and a `CHECK (final >= 0)` constraint would push these rules into the database.
+- **Fixed so far:** the critical bugs (lost-update race, password hash in the register response, unauthenticated ledger access, catalog-corrupting down migration) and the logic bugs (route order, pagination, overdrafts, sign vs type, error handling). See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full checklist.
+- **Balance rules live only in the app.** Overdrafts and wrong signs are rejected in Go, but the database itself would still accept them. `CHECK (final = current + add)` and `CHECK (final >= 0)` constraints would make Postgres enforce them too.
 - **Ledger rows are mutable.** `UpdateLedger` and `DeleteLedger` queries exist, which goes against the append-only idea. A real ledger would correct mistakes with a new reversing entry instead.
-- **Route order.** `GET /ledgers/:id` is registered before `GET /ledgers/balance`, so the `balance` path can be captured by `:id`.
-- **Pagination naming.** The `offset` query param is actually used as a page number (`OFFSET (page - 1) * limit`), and `0` produces a negative offset.
 - **PASETO key is hardcoded** in `internal/token/paseto.go` instead of read from the environment.
 
 ## Tech stack

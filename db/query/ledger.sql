@@ -2,7 +2,8 @@
 SELECT *
 FROM ledger
 WHERE user_id = $1
-LIMIT $3 OFFSET (($2 - 1) * $3);
+ORDER BY seq DESC
+LIMIT sqlc.arg(page_size) OFFSET sqlc.arg(page_offset);
 
 -- name: GetLedgerByID :one
 SELECT *

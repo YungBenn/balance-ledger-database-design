@@ -13,27 +13,27 @@ Bugs, improvements, and refactors found while reviewing this learning project. F
 
 ### Logic
 
-- [ ] **`/balance` is unreachable.** `/:id` is registered before `/balance` (`internal/ledger/routes.go:20-21`), so `GET /ledgers/balance` is handled as a ledger lookup with `id = "balance"`.
-- [ ] **Errors become an empty 200.** `response.ErrorHandler` returns `nil` for anything that isn't a `*response.Error` (`pkg/response/error.go:26`). For example, a database failure in `GetLedgerByID` (`internal/ledger/usecase.go:55`) makes the handler `return nil`.
-- [ ] **Pagination is broken.**
-  - [ ] The `offset` param is actually a page number: `OFFSET (page - 1) * limit`.
-  - [ ] `offset=0` produces a negative OFFSET, which Postgres rejects.
-  - [ ] With no query params, `limit` defaults to 0, so the list is always empty.
-  - [ ] `ListLedgerByUser` has no `ORDER BY`, so the order between pages isn't guaranteed.
-- [ ] **Balance can go negative.** Nothing rejects a withdrawal larger than the current balance.
-- [ ] **The sign of `add` isn't checked against `type`.** A `deposit` of -500 or a `withdrawal` of +500 is accepted.
+- [x] **`/balance` is unreachable.** `/:id` is registered before `/balance` (`internal/ledger/routes.go:20-21`), so `GET /ledgers/balance` is handled as a ledger lookup with `id = "balance"`.
+- [x] **Errors become an empty 200.** `response.ErrorHandler` returns `nil` for anything that isn't a `*response.Error` (`pkg/response/error.go:26`). For example, a database failure in `GetLedgerByID` (`internal/ledger/usecase.go:55`) makes the handler `return nil`.
+- [x] **Pagination is broken.**
+  - [x] The `offset` param is actually a page number: `OFFSET (page - 1) * limit`.
+  - [x] `offset=0` produces a negative OFFSET, which Postgres rejects.
+  - [x] With no query params, `limit` defaults to 0, so the list is always empty.
+  - [x] `ListLedgerByUser` has no `ORDER BY`, so the order between pages isn't guaranteed.
+- [x] **Balance can go negative.** Nothing rejects a withdrawal larger than the current balance.
+- [x] **The sign of `add` isn't checked against `type`.** A `deposit` of -500 or a `withdrawal` of +500 is accepted.
 - [x] **"Latest balance" can be ambiguous.** `GetBalanceByUser` orders by `created_at`, so two entries with the same timestamp give an unpredictable result.
-- [ ] **Every `CreateLedger` failure is a 500.** It returns plain `fmt.Errorf` errors, so an unknown user, which should be a 400 or 404, also comes back as a 500.
-- [ ] **A bad `type` value is a 500 instead of a 400.** It isn't validated before Postgres rejects it.
-- [ ] **Registration ignores database errors.** `Register` discards the error from `GetUserByEmail` (`internal/auth/usecase.go:68`). Two simultaneous sign-ups with the same email both pass the check, and the unique violation comes back as a 500.
-- [ ] **A failed ID generation is silently ignored.** `GenerateCUID` returns `""` on error (`pkg/utils/helper.go:15`), which can insert a row with an empty ID.
-- [ ] **`GetCurrentUser` can panic.** It assumes the user is always set, so it panics on any route without the auth middleware.
-- [ ] **Startup reports a connection it hasn't made.** `pgxpool.New` doesn't connect, so `postgresql.Connect` logs success even when the database is down. Add `db.Ping(ctx)`.
-- [ ] **The database pool is never closed.** `log.Fatal` exits immediately, so the deferred `postgresql.Close(db)` never runs.
-- [ ] **Several Makefile targets don't work.**
-  - [ ] `sqlc` uses a hardcoded `/home/rubenadi/...` path.
-  - [ ] `docker.stop` passes an image name, but `docker stop` needs a container name or ID.
-  - [ ] `docker.run` sets `DB_HOST=localhost`, which inside the container points at the container itself.
+- [x] **Every `CreateLedger` failure is a 500.** It returns plain `fmt.Errorf` errors, so an unknown user, which should be a 400 or 404, also comes back as a 500.
+- [x] **A bad `type` value is a 500 instead of a 400.** It isn't validated before Postgres rejects it.
+- [x] **Registration ignores database errors.** `Register` discards the error from `GetUserByEmail` (`internal/auth/usecase.go:68`). Two simultaneous sign-ups with the same email both pass the check, and the unique violation comes back as a 500.
+- [x] **A failed ID generation is silently ignored.** `GenerateCUID` returns `""` on error (`pkg/utils/helper.go:15`), which can insert a row with an empty ID.
+- [x] **`GetCurrentUser` can panic.** It assumes the user is always set, so it panics on any route without the auth middleware.
+- [x] **Startup reports a connection it hasn't made.** `pgxpool.New` doesn't connect, so `postgresql.Connect` logs success even when the database is down. Add `db.Ping(ctx)`.
+- [x] **The database pool is never closed.** `log.Fatal` exits immediately, so the deferred `postgresql.Close(db)` never runs.
+- [x] **Several Makefile targets don't work.**
+  - [x] `sqlc` uses a hardcoded `/home/rubenadi/...` path.
+  - [x] `docker.stop` passes an image name, but `docker stop` needs a container name or ID.
+  - [x] `docker.run` sets `DB_HOST=localhost`, which inside the container points at the container itself.
 
 ## Improvements: database design
 
@@ -49,17 +49,17 @@ Bugs, improvements, and refactors found while reviewing this learning project. F
 ## Refactors: code
 
 - [x] **Keep one sqlc output folder.** `sqlc.yaml` writes to `internal/postgresql/sqlc`, but the app imports `db/sqlc`, so `make sqlc` updates code nobody uses.
-- [ ] **Name the pagination params** with `sqlc.arg(page)` and `sqlc.arg(page_size)` instead of the generated `Column2 interface{}`.
+- [x] **Name the pagination params** with `sqlc.arg(page)` and `sqlc.arg(page_size)` instead of the generated `Column2 interface{}`.
 - [x] **Add transaction support to the repository.** `SQLRepository` already holds the `db` pool but never uses it.
 - [ ] **Use request and response types instead of `sqlc` types in handlers.** `internal/ledger/dto.go` is empty. This also fixes the password-hash leak.
 - [ ] **Validate input at the handler.**
   - [ ] Email format
   - [ ] Password length
-  - [ ] `add != 0`
-  - [ ] `type` is one of the allowed values
-- [ ] **Use one error path.** Every usecase returns `response.Error` with the right status, and the global Fiber error handler maps it.
+  - [x] `add != 0`
+  - [x] `type` is one of the allowed values
+- [x] **Use one error path.** Every usecase returns `response.Error` with the right status, and the global Fiber error handler maps it.
 - [ ] **Make response shapes consistent.** The top-level key is currently one of `data`, `ledger`, `ledgers` or `balance`.
-- [ ] **Remove the dead line in `FiberErrorHandler`** that sets text/plain right before writing JSON.
+- [x] **Remove the dead line in `FiberErrorHandler`** that sets text/plain right before writing JSON.
 - [ ] **Load the PASETO key from the environment** instead of hardcoding it in `internal/token/paseto.go`.
 - [ ] **Add graceful shutdown** with `app.Shutdown` on SIGINT/SIGTERM.
 - [ ] **Pin the Go version in the Dockerfile** (`golang:1.22-alpine`).

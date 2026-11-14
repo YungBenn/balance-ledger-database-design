@@ -17,6 +17,7 @@ func SetupLedgerRoutes(app *fiber.App, db *pgxpool.Pool) {
 
 	r.Post("/", handler.CreateLedger)
 	r.Get("/", handler.GetListLedger)
-	r.Get("/:id", handler.GetLedgerByID)
+	// Must be registered before /:id, or "balance" is matched as a ledger id.
 	r.Get("/balance", handler.GetBalance)
+	r.Get("/:id", handler.GetLedgerByID)
 }

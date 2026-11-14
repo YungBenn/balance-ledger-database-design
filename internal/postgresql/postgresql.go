@@ -13,6 +13,12 @@ func Connect(ctx context.Context, dbURL string) (*pgxpool.Pool, error) {
 		return nil, err
 	}
 
+	// pgxpool.New connects lazily, so ping to fail fast when the database is unreachable.
+	if err := db.Ping(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	log.Println("Success connect to database")
 
 	return db, nil

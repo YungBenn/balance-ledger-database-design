@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type AuthUsecase interface {
@@ -65,9 +66,12 @@ func (a *authUsecase) Login(ctx context.Context, arg LoginRequest) (*LoginRespon
 
 // Register implements AuthUsecase.
 func (a *authUsecase) Register(ctx context.Context, arg sqlc.CreateUserParams) (*UserData, error) {
-	user, _ := a.repo.GetUserByEmail(ctx, arg.Email)
-	if user.Email != "" {
+	_, err := a.repo.GetUserByEmail(ctx, arg.Email)
+	if err == nil {
 		return nil, response.NewError(http.StatusBadRequest, ErrEmailExist)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, response.NewError(http.StatusInternalServerError, err)
 	}
 
 	hashedPass, errHashed := utils.HashPassword(arg.Password)
@@ -75,8 +79,13 @@ func (a *authUsecase) Register(ctx context.Context, arg sqlc.CreateUserParams) (
 		return nil, response.NewError(http.StatusInternalServerError, errHashed)
 	}
 
+	id, err := utils.GenerateCUID()
+	if err != nil {
+		return nil, response.NewError(http.StatusInternalServerError, err)
+	}
+
 	newUser := sqlc.CreateUserParams{
-		ID:       utils.GenerateCUID(),
+		ID:       id,
 		Email:    arg.Email,
 		FullName: arg.FullName,
 		Password: hashedPass,
@@ -84,6 +93,12 @@ func (a *authUsecase) Register(ctx context.Context, arg sqlc.CreateUserParams) (
 
 	user, err := a.repo.CreateUser(ctx, newUser)
 	if err != nil {
+		// Two sign-ups with the same email can both pass the check above;
+		// the UNIQUE constraint on email rejects the second one.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, response.NewError(http.StatusBadRequest, ErrEmailExist)
+		}
 		return nil, response.NewError(http.StatusInternalServerError, err)
 	}
 

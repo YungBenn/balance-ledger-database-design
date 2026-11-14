@@ -30,8 +30,6 @@ func main() {
 		log.Panic(err)
 	}
 
-	defer postgresql.Close(db)
-
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 		ErrorHandler:          utils.FiberErrorHandler,
@@ -41,5 +39,10 @@ func main() {
 	ledger.SetupLedgerRoutes(app, db)
 
 	log.Printf("Server started on http://127.0.0.1:%s", os.Getenv("PORT"))
-	log.Fatal(app.Listen(":" + os.Getenv("PORT")))
+	err = app.Listen(":" + os.Getenv("PORT"))
+	// Close explicitly: log.Fatal exits without running deferred calls.
+	postgresql.Close(db)
+	if err != nil {
+		log.Fatal(err)
+	}
 }

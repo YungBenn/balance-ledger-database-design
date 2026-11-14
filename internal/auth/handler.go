@@ -2,7 +2,6 @@ package auth
 
 import (
 	"balance-ledger-database-design/db/sqlc"
-	"balance-ledger-database-design/pkg/response"
 	"net/http"
 
 	"github.com/gofiber/fiber/v2"
@@ -24,7 +23,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 
 	res, err := h.usecase.Login(c.Context(), arg)
 	if err != nil {
-		return response.ErrorHandler(err)
+		return err
 	}
 
 	return c.Status(http.StatusOK).JSON(fiber.Map{
@@ -42,7 +41,7 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 
 	res, err := h.usecase.Register(c.Context(), arg)
 	if err != nil {
-		return response.ErrorHandler(err)
+		return err
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{

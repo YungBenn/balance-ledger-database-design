@@ -11,9 +11,10 @@ docker.build:
 	@docker build -f build/server/Dockerfile -t rubenadi/balance-ledger:latest .
 
 docker.run:
-	@docker run -d \
+	@docker run -d --name balance-ledger \
+		--add-host=host.docker.internal:host-gateway \
 		-e PORT="8002" \
-		-e DB_HOST="localhost" \
+		-e DB_HOST="host.docker.internal" \
 		-e DB_PORT="5433" \
 		-e DB_USER="postgres" \
 		-e DB_PASSWORD="secret" \
@@ -23,10 +24,10 @@ docker.run:
 		rubenadi/balance-ledger:latest
 
 docker.stop:
-	@docker stop rubenadi/balance-ledger:latest
+	@docker rm -f balance-ledger
 
 sqlc:
-	docker run --rm -v /home/rubenadi/tuts/balance-ledger-database-design:/src -w /src kjconroy/sqlc generate
+	docker run --rm -v "$(CURDIR)":/src -w /src sqlc/sqlc:1.30.0 generate
 
 migrate.up:
 	migrate -path db/migrations -database "postgresql://postgres:secret@localhost:5433/balance_ledger?sslmode=disable" up

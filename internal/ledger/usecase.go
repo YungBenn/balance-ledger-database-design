@@ -24,9 +24,9 @@ type LedgerUsecase interface {
 	// Returns the balance amount and any error encountered during the process.
 	GetBalance(ctx context.Context, userID string) (*int64, error)
 
-	// GetListLedger retrieves a list of ledger entries for a specific user.
+	// GetListLedger retrieves one page of a user's ledger entries, newest first.
 	// Returns the list of ledger entries and any error encountered during the process.
-	GetListLedger(ctx context.Context, userID string, limit int32, offset int32) ([]sqlc.Ledger, error)
+	GetListLedger(ctx context.Context, userID string, page int32, limit int32) ([]sqlc.Ledger, error)
 
 	// GetLedgerByID retrieves a ledger entry by its ID, only if it belongs to userID.
 	// Returns the ledger entry and any error encountered during the process.
@@ -64,11 +64,15 @@ func (a *ledgerUsecase) GetLedgerByID(ctx context.Context, ledgerID string, user
 }
 
 // GetListLedger implements LedgerUsecase.
-func (a *ledgerUsecase) GetListLedger(ctx context.Context, userID string, limit int32, offset int32) ([]sqlc.Ledger, error) {
+func (a *ledgerUsecase) GetListLedger(ctx context.Context, userID string, page int32, limit int32) ([]sqlc.Ledger, error) {
+	if page < 1 || limit < 1 || limit > 100 {
+		return nil, response.NewError(http.StatusBadRequest, ErrInvalidPagination)
+	}
+
 	arg := sqlc.ListLedgerByUserParams{
-		UserID:  userID,
-		Column2: offset,
-		Limit:   limit,
+		UserID:     userID,
+		PageOffset: (page - 1) * limit,
+		PageSize:   limit,
 	}
 
 	ledgers, err := a.repo.ListLedgerByUser(ctx, arg)
@@ -95,14 +99,48 @@ func (a *ledgerUsecase) GetBalance(ctx context.Context, userID string) (*int64, 
 	return &balance, nil
 }
 
+// validateEntry checks the type and that the sign of add matches it:
+// money in (deposit, refund) is positive, money out (withdrawal, purchase) is negative.
+func validateEntry(t sqlc.TypeEnum, add int64) error {
+	if add == 0 {
+		return response.NewError(http.StatusBadRequest, ErrZeroAmount)
+	}
+
+	switch t {
+	case sqlc.TypeEnumDeposit, sqlc.TypeEnumRefund:
+		if add < 0 {
+			return response.NewError(http.StatusBadRequest, ErrInvalidSign)
+		}
+	case sqlc.TypeEnumWithdrawal, sqlc.TypeEnumPurchase:
+		if add > 0 {
+			return response.NewError(http.StatusBadRequest, ErrInvalidSign)
+		}
+	default:
+		return response.NewError(http.StatusBadRequest, ErrInvalidType)
+	}
+	return nil
+}
+
 func (a *ledgerUsecase) CreateLedger(ctx context.Context, arg sqlc.CreateLedgerParams) (*sqlc.Ledger, error) {
+	if err := validateEntry(arg.Type, arg.Add); err != nil {
+		return nil, err
+	}
+
+	id, err := utils.GenerateCUID()
+	if err != nil {
+		return nil, err
+	}
+
 	var ledgerData sqlc.Ledger
 
-	err := a.repo.ExecTx(ctx, func(q sqlc.Querier) error {
+	err = a.repo.ExecTx(ctx, func(q sqlc.Querier) error {
 		// Lock the user row so concurrent entries for the same user run one at a time.
 		// Without it, two requests read the same balance and one update is lost.
 		if _, err := q.GetUserByIDForUpdate(ctx, arg.UserID); err != nil {
-			return fmt.Errorf("invalid user: %w", err)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return response.NewError(http.StatusNotFound, ErrUserNotFound)
+			}
+			return fmt.Errorf("failed to lock user: %w", err)
 		}
 
 		// The latest entry holds the current balance; a user with no entries starts at 0, seq 0.
@@ -111,8 +149,13 @@ func (a *ledgerUsecase) CreateLedger(ctx context.Context, arg sqlc.CreateLedgerP
 			return fmt.Errorf("failed to get balance: %w", err)
 		}
 
+		// Checked under the lock, so no concurrent withdrawal can slip past it.
+		if latest.Final+arg.Add < 0 {
+			return response.NewError(http.StatusBadRequest, ErrInsufficientBalance)
+		}
+
 		newLedger := sqlc.CreateLedgerParams{
-			ID:          utils.GenerateCUID(),
+			ID:          id,
 			UserID:      arg.UserID,
 			Type:        arg.Type,
 			Description: arg.Description,

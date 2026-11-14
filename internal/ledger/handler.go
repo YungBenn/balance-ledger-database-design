@@ -2,7 +2,6 @@ package ledger
 
 import (
 	"balance-ledger-database-design/db/sqlc"
-	"balance-ledger-database-design/pkg/response"
 	"balance-ledger-database-design/pkg/utils"
 	"net/http"
 
@@ -18,13 +17,18 @@ func NewLedgerHandler(usecase LedgerUsecase) *LedgerHandler {
 }
 
 func (h *LedgerHandler) CreateLedger(c *fiber.Ctx) error {
-	var arg sqlc.CreateLedgerParams
-	if err := c.BodyParser(&arg); err != nil {
+	user, err := utils.GetCurrentUser(c)
+	if err != nil {
 		return err
 	}
 
+	var arg sqlc.CreateLedgerParams
+	if err := c.BodyParser(&arg); err != nil {
+		return fiber.NewError(http.StatusBadRequest, err.Error())
+	}
+
 	// Always write to the logged-in user, never to a user_id from the body.
-	arg.UserID = utils.GetCurrentUser(c).UserID
+	arg.UserID = user.UserID
 
 	res, err := h.usecase.CreateLedger(c.Context(), arg)
 	if err != nil {
@@ -39,7 +43,10 @@ func (h *LedgerHandler) CreateLedger(c *fiber.Ctx) error {
 }
 
 func (h *LedgerHandler) GetBalance(c *fiber.Ctx) error {
-	user := utils.GetCurrentUser(c)
+	user, err := utils.GetCurrentUser(c)
+	if err != nil {
+		return err
+	}
 
 	res, err := h.usecase.GetBalance(c.Context(), user.UserID)
 	if err != nil {
@@ -54,13 +61,17 @@ func (h *LedgerHandler) GetBalance(c *fiber.Ctx) error {
 }
 
 func (h *LedgerHandler) GetListLedger(c *fiber.Ctx) error {
-	userID := utils.GetCurrentUser(c).UserID
-	limit := c.QueryInt("limit")
-	offset := c.QueryInt("offset")
-
-	res, err := h.usecase.GetListLedger(c.Context(), userID, int32(limit), int32(offset))
+	user, err := utils.GetCurrentUser(c)
 	if err != nil {
-		return response.ErrorHandler(err)
+		return err
+	}
+
+	page := c.QueryInt("page", 1)
+	limit := c.QueryInt("limit", 10)
+
+	res, err := h.usecase.GetListLedger(c.Context(), user.UserID, int32(page), int32(limit))
+	if err != nil {
+		return err
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -71,11 +82,14 @@ func (h *LedgerHandler) GetListLedger(c *fiber.Ctx) error {
 }
 
 func (h *LedgerHandler) GetLedgerByID(c *fiber.Ctx) error {
-	id := c.Params("id")
-
-	res, err := h.usecase.GetLedgerByID(c.Context(), id, utils.GetCurrentUser(c).UserID)
+	user, err := utils.GetCurrentUser(c)
 	if err != nil {
-		return response.ErrorHandler(err)
+		return err
+	}
+
+	res, err := h.usecase.GetLedgerByID(c.Context(), c.Params("id"), user.UserID)
+	if err != nil {
+		return err
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
