@@ -111,6 +111,22 @@ func TestCreateLedgerConcurrent(t *testing.T) {
 	if *balance != n {
 		t.Fatalf("balance = %d, want %d (lost updates)", *balance, n)
 	}
+
+	// Walk the chain oldest first: seq has no gaps and each entry starts where the previous one ended.
+	entries, err := uc.GetListLedger(ctx, userID, 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prevFinal int64
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		wantSeq := int64(len(entries) - i)
+		if e.Seq != wantSeq || e.Current != prevFinal || e.Final != e.Current+e.Add {
+			t.Fatalf("broken chain at seq %d: current=%d add=%d final=%d, want seq %d current %d",
+				e.Seq, e.Current, e.Add, e.Final, wantSeq, prevFinal)
+		}
+		prevFinal = e.Final
+	}
 }
 
 func TestCreateLedgerRejectsOverdraft(t *testing.T) {

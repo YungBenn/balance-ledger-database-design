@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"balance-ledger-database-design/db/sqlc"
 	"net/http"
 
 	"github.com/gofiber/fiber/v2"
@@ -21,7 +20,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		return fiber.NewError(http.StatusBadRequest, err.Error())
 	}
 
-	res, err := h.usecase.Login(c.Context(), arg)
+	res, err := h.usecase.Login(c.UserContext(), arg)
 	if err != nil {
 		return err
 	}
@@ -34,12 +33,12 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 }
 
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
-	var arg sqlc.CreateUserParams
+	var arg RegisterRequest
 	if err := c.BodyParser(&arg); err != nil {
 		return fiber.NewError(http.StatusBadRequest, err.Error())
 	}
 
-	res, err := h.usecase.Register(c.Context(), arg)
+	res, err := h.usecase.Register(c.UserContext(), arg)
 	if err != nil {
 		return err
 	}

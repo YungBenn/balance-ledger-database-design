@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/mail"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,7 +18,7 @@ import (
 )
 
 type AuthUsecase interface {
-	Register(ctx context.Context, arg sqlc.CreateUserParams) (*UserData, error)
+	Register(ctx context.Context, arg RegisterRequest) (*UserData, error)
 	Login(ctx context.Context, arg LoginRequest) (*LoginResponse, error)
 }
 
@@ -64,8 +66,28 @@ func (a *authUsecase) Login(ctx context.Context, arg LoginRequest) (*LoginRespon
 	return loginResponse, nil
 }
 
+// validateRegister checks the sign-up input. The 72-byte password limit is bcrypt's own maximum.
+func validateRegister(arg RegisterRequest) error {
+	// ParseAddress also accepts "Name <a@b.c>", so require the input to be the bare address.
+	addr, err := mail.ParseAddress(arg.Email)
+	if err != nil || addr.Address != arg.Email {
+		return response.NewError(http.StatusBadRequest, ErrInvalidEmail)
+	}
+	if strings.TrimSpace(arg.FullName) == "" {
+		return response.NewError(http.StatusBadRequest, ErrInvalidFullName)
+	}
+	if len(arg.Password) < 8 || len(arg.Password) > 72 {
+		return response.NewError(http.StatusBadRequest, ErrPasswordLength)
+	}
+	return nil
+}
+
 // Register implements AuthUsecase.
-func (a *authUsecase) Register(ctx context.Context, arg sqlc.CreateUserParams) (*UserData, error) {
+func (a *authUsecase) Register(ctx context.Context, arg RegisterRequest) (*UserData, error) {
+	if err := validateRegister(arg); err != nil {
+		return nil, err
+	}
+
 	_, err := a.repo.GetUserByEmail(ctx, arg.Email)
 	if err == nil {
 		return nil, response.NewError(http.StatusBadRequest, ErrEmailExist)

@@ -75,7 +75,7 @@ Defined in [`db/migrations/000002_create_ledger_table.up.sql`](db/migrations/000
 | `type`        | `type_enum`   | `deposit`, `withdrawal`, `refund`, `purchase`               |
 | `description` | `varchar`     | human-readable reason for the entry                         |
 | `current`     | `bigint`      | balance **before** this entry                               |
-| `add`         | `bigint`      | amount of this entry (negative for money leaving)           |
+| `add`         | `bigint`      | amount of this entry; `CHECK` positive for `deposit`/`refund`, negative for `withdrawal`/`purchase` |
 | `final`       | `bigint`      | balance **after** this entry; `CHECK (final = current + add)` and `CHECK (final >= 0)` |
 | `seq`         | `bigint`      | per-user entry number (1, 2, 3...), `UNIQUE (user_id, seq)`, added in [`000003`](db/migrations/000003_add_ledger_seq.up.sql) |
 | `idempotency_key` | `varchar` | optional key from the `Idempotency-Key` header, `UNIQUE (user_id, idempotency_key)` |
@@ -86,7 +86,7 @@ There is no `updated_at`: entries are never updated. Constraints, the idempotenc
 ### Design decisions
 
 - **Append-only history.** A balance change is a new row, not an `UPDATE`. The full history of how a balance got to its value is always in the table. A `BEFORE UPDATE` trigger makes Postgres reject any edit, so a mistake is corrected with a new entry (for example a `refund`). `DELETE` is still allowed, so deleting a user cascades to their entries.
-- **The database enforces the math.** `CHECK (final = current + add)` and `CHECK (final >= 0)` mean even a buggy app or a manual `INSERT` can't store an inconsistent or negative balance. The app checks the same rules first to return a clear `400`.
+- **The database enforces the rules.** `CHECK (final = current + add)`, `CHECK (final >= 0)`, and a sign check on `add` per `type` ([`000005`](db/migrations/000005_add_ledger_sign_check.up.sql)) mean even a buggy app or a manual `INSERT` can't store an inconsistent, negative, or wrongly signed entry. The app checks the same rules first to return a clear `400`.
 - **Safe retries.** If a client sends an `Idempotency-Key` header and retries after a timeout, the original entry is returned instead of creating a second one. The lookup runs under the same user lock, and `UNIQUE (user_id, idempotency_key)` is the backstop.
 - **Snapshot of before and after on every row.** Storing `current`, `add`, and `final` means each row is self-describing. You can verify any row on its own (`final = current + add`) and verify the chain (`row[n].current = row[n-1].final`).
 - **Balance is derived, not stored.** There is no `balance` column on `users`. The current balance is read from the most recent ledger row:
@@ -188,7 +188,7 @@ Base path: `/api/v1`
 
 | Method | Path                | Auth   | Description                                         |
 | ------ | ------------------- | ------ | --------------------------------------------------- |
-| POST   | `/auth/register`    | -      | Create a user (`email`, `full_name`, `password`)    |
+| POST   | `/auth/register`    | -      | Create a user (`email`, `full_name`, `password`). Email must be a bare address, name non-empty, password 8-72 bytes (bcrypt's limit) |
 | POST   | `/auth/login`       | -      | Returns a PASETO token (valid 1 hour) and the user  |
 | POST   | `/ledgers`          | Bearer | Create an entry for the logged-in user (`type`, `description`, `add`) |
 | GET    | `/ledgers`          | Bearer | List your entries, newest first: `?page=1&limit=10` (limit max 100) |
@@ -202,6 +202,8 @@ Rules for `POST /ledgers`, each rejected with `400`:
 - The resulting balance must not go below `0`. This is checked while the user's row is locked, so two concurrent withdrawals can't both pass.
 
 Send an optional `Idempotency-Key` header (max 255 characters) to make retries safe: the same key with the same request returns the original entry with `201`, and the same key with a different request returns `409`.
+
+Every success response looks like `{"status": <code>, "message": "...", "data": ...}`, where `data` is the entry, a list of entries, `{"balance": n}`, the user, or `{"token", "user"}` for login. Request and response bodies are their own types (`dto.go`), so clients can never set server-owned fields like `current`, `final`, `seq`, or `user_id`.
 
 Errors always look like `{"status": <code>, "message": "..."}`. For `500` errors the message is just `internal server error`; the real cause is logged on the server.
 
@@ -226,7 +228,7 @@ curl -X POST localhost:8002/api/v1/ledgers \
 Requirements: Go 1.22+, Docker, and the [`migrate`](https://github.com/golang-migrate/migrate) CLI.
 
 ```bash
-cp .env.example .env     # app runs on :8002, Postgres on :5433
+cp .env.example .env     # app runs on :8002, Postgres on :5433; set your own TOKEN_SYMMETRIC_KEY
 make docker.up           # start Postgres + Adminer (http://localhost:8082)
 make migrate.up          # create the users and ledger tables
 make run                 # start the API
@@ -244,9 +246,10 @@ Other targets: `make migrate.down`, `make docker.down`, `make docker.build`, `ma
 
 Things I noticed while building this, and what I would study or change next. Keeping them here is part of the learning.
 
-- **Fixed so far:** the critical bugs (lost-update race, password hash in the register response, unauthenticated ledger access, catalog-corrupting down migration) and the logic bugs (route order, pagination, overdrafts, sign vs type, error handling), and the database design items (CHECK constraints, append-only trigger, idempotency key). See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full checklist.
-- **Sign vs type lives only in the app.** Postgres enforces the balance math and non-negative balances, but not that a `deposit` is positive. A `CHECK` on `type` and `add` could cover that too.
-- **PASETO key is hardcoded** in `internal/token/paseto.go` instead of read from the environment.
+- **Fixed so far:** the critical bugs (lost-update race, password hash in the register response, unauthenticated ledger access, catalog-corrupting down migration) and the logic bugs (route order, pagination, overdrafts, sign vs type, error handling), the database design items (CHECK constraints, append-only trigger, idempotency key), and the code refactors (request/response types, input validation, consistent responses, key from env, graceful shutdown). See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full checklist.
+- **Every item in the checklist is done.** Ideas for further study: reversing a specific entry by id, a DB-level `CHECK` on `description`, and email normalization (today `A@x.io` and `a@x.io` are different users).
+- **The old hardcoded PASETO key is still in git history.** It is no longer used: the server reads `TOKEN_SYMMETRIC_KEY` (exactly 32 bytes) and refuses to start without it. Never reuse the old value.
+- **Graceful shutdown uses `c.UserContext()`, not `c.Context()`.** Fiber's `c.Context()` is the fasthttp request context, which is cancelled as soon as shutdown starts. Using it for database calls aborted in-flight writes, and a commit that reached Postgres could still return `500` to the client.
 
 ## Tech stack
 

@@ -40,6 +40,7 @@ Bugs, improvements, and refactors found while reviewing this learning project. F
 - [x] Make ledger rows permanent: remove the `UpdateLedger` and `DeleteLedger` queries and fix mistakes with a new reversing entry. (Also a trigger rejects `UPDATE` in Postgres.)
 - [x] Add `CHECK (final = current + add)`.
 - [x] Add `CHECK (final >= 0)`.
+- [x] Add a `CHECK` that the sign of `add` matches `type` (migration `000005`).
 - [x] Add a per-user sequence number with `UNIQUE (user_id, seq)`. This settles which entry is latest and blocks the lost-update race.
 - [x] Or lock the user row (`SELECT ... FROM users WHERE id = $1 FOR UPDATE`) inside a transaction while writing an entry. (Did both: the lock serializes writers, the unique `seq` is the safety net.)
 - [x] Add an index on `ledger (user_id, created_at DESC)`, or on `(user_id, seq)` if you add the sequence. (Covered by the `UNIQUE (user_id, seq)` index.)
@@ -51,18 +52,18 @@ Bugs, improvements, and refactors found while reviewing this learning project. F
 - [x] **Keep one sqlc output folder.** `sqlc.yaml` writes to `internal/postgresql/sqlc`, but the app imports `db/sqlc`, so `make sqlc` updates code nobody uses.
 - [x] **Name the pagination params** with `sqlc.arg(page)` and `sqlc.arg(page_size)` instead of the generated `Column2 interface{}`.
 - [x] **Add transaction support to the repository.** `SQLRepository` already holds the `db` pool but never uses it.
-- [ ] **Use request and response types instead of `sqlc` types in handlers.** `internal/ledger/dto.go` is empty. This also fixes the password-hash leak.
-- [ ] **Validate input at the handler.**
-  - [ ] Email format
-  - [ ] Password length
+- [x] **Use request and response types instead of `sqlc` types in handlers.** `internal/ledger/dto.go` is empty. This also fixes the password-hash leak.
+- [x] **Validate input at the handler.**
+  - [x] Email format
+  - [x] Password length
   - [x] `add != 0`
   - [x] `type` is one of the allowed values
 - [x] **Use one error path.** Every usecase returns `response.Error` with the right status, and the global Fiber error handler maps it.
-- [ ] **Make response shapes consistent.** The top-level key is currently one of `data`, `ledger`, `ledgers` or `balance`.
+- [x] **Make response shapes consistent.** The top-level key is currently one of `data`, `ledger`, `ledgers` or `balance`.
 - [x] **Remove the dead line in `FiberErrorHandler`** that sets text/plain right before writing JSON.
-- [ ] **Load the PASETO key from the environment** instead of hardcoding it in `internal/token/paseto.go`.
-- [ ] **Add graceful shutdown** with `app.Shutdown` on SIGINT/SIGTERM.
-- [ ] **Pin the Go version in the Dockerfile** (`golang:1.22-alpine`).
-- [ ] **Add tests.**
-  - [ ] Integration test for `CreateLedger` that checks the balance chain stays consistent (`row[n].current = row[n-1].final`).
+- [x] **Load the PASETO key from the environment** instead of hardcoding it in `internal/token/paseto.go`.
+- [x] **Add graceful shutdown** with `app.Shutdown` on SIGINT/SIGTERM.
+- [x] **Pin the Go version in the Dockerfile** (`golang:1.22-alpine`).
+- [x] **Add tests.**
+  - [x] Integration test for `CreateLedger` that checks the balance chain stays consistent (`row[n].current = row[n-1].final`).
   - [x] Concurrency test that sends simultaneous `CreateLedger` requests to catch the lost-update race.

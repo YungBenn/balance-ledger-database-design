@@ -20,6 +20,7 @@ docker.run:
 		-e DB_PASSWORD="secret" \
 		-e DB_NAME="balance_ledger" \
 		-e DB_SSL_MODE="disable" \
+		-e TOKEN_SYMMETRIC_KEY="change-me-32-byte-dev-key-000000" \
 		-p 8002:8002 \
 		rubenadi/balance-ledger:latest
 

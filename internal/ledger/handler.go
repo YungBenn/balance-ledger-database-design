@@ -23,18 +23,21 @@ func (h *LedgerHandler) CreateLedger(c *fiber.Ctx) error {
 		return err
 	}
 
-	var arg sqlc.CreateLedgerParams
-	if err := c.BodyParser(&arg); err != nil {
+	var req CreateLedgerRequest
+	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(http.StatusBadRequest, err.Error())
 	}
 
-	// Always write to the logged-in user, never to a user_id from the body.
-	arg.UserID = user.UserID
-	// The idempotency key only comes from the header.
 	key := c.Get("Idempotency-Key")
-	arg.IdempotencyKey = pgtype.Text{String: key, Valid: key != ""}
+	arg := sqlc.CreateLedgerParams{
+		UserID:         user.UserID, // always the logged-in user
+		Type:           sqlc.TypeEnum(req.Type),
+		Description:    req.Description,
+		Add:            req.Add,
+		IdempotencyKey: pgtype.Text{String: key, Valid: key != ""},
+	}
 
-	res, err := h.usecase.CreateLedger(c.Context(), arg)
+	res, err := h.usecase.CreateLedger(c.UserContext(), arg)
 	if err != nil {
 		return err
 	}
@@ -42,7 +45,7 @@ func (h *LedgerHandler) CreateLedger(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"status":  http.StatusCreated,
 		"message": "success",
-		"ledger":  res,
+		"data":    toLedgerResponse(*res),
 	})
 }
 
@@ -52,7 +55,7 @@ func (h *LedgerHandler) GetBalance(c *fiber.Ctx) error {
 		return err
 	}
 
-	res, err := h.usecase.GetBalance(c.Context(), user.UserID)
+	res, err := h.usecase.GetBalance(c.UserContext(), user.UserID)
 	if err != nil {
 		return err
 	}
@@ -60,7 +63,7 @@ func (h *LedgerHandler) GetBalance(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":  http.StatusOK,
 		"message": "success",
-		"balance": res,
+		"data":    BalanceResponse{Balance: *res},
 	})
 }
 
@@ -73,15 +76,20 @@ func (h *LedgerHandler) GetListLedger(c *fiber.Ctx) error {
 	page := c.QueryInt("page", 1)
 	limit := c.QueryInt("limit", 10)
 
-	res, err := h.usecase.GetListLedger(c.Context(), user.UserID, int32(page), int32(limit))
+	res, err := h.usecase.GetListLedger(c.UserContext(), user.UserID, int32(page), int32(limit))
 	if err != nil {
 		return err
+	}
+
+	ledgers := make([]LedgerResponse, len(res))
+	for i, l := range res {
+		ledgers[i] = toLedgerResponse(l)
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":  http.StatusOK,
 		"message": "success",
-		"ledgers": res,
+		"data":    ledgers,
 	})
 }
 
@@ -91,7 +99,7 @@ func (h *LedgerHandler) GetLedgerByID(c *fiber.Ctx) error {
 		return err
 	}
 
-	res, err := h.usecase.GetLedgerByID(c.Context(), c.Params("id"), user.UserID)
+	res, err := h.usecase.GetLedgerByID(c.UserContext(), c.Params("id"), user.UserID)
 	if err != nil {
 		return err
 	}
@@ -99,6 +107,6 @@ func (h *LedgerHandler) GetLedgerByID(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":  http.StatusOK,
 		"message": "success",
-		"ledger":  res,
+		"data":    toLedgerResponse(*res),
 	})
 }
